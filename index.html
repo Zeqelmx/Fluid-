@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- CODIGO CREADO POR ZEQEL 2026 . -->
+<!-- CODIGO CREADO POR ZEQEL -->
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -177,11 +177,6 @@
         input[type="range"]::-moz-range-thumb {
             width: 14px; height: 14px; border-radius: 50%;
             background: #fff; border: 1px solid #000; cursor: pointer;
-        }
-
-        input[type="checkbox"] {
-            cursor: pointer; accent-color: #fff;
-            width: 14px; height: 14px; flex-shrink: 0;
         }
 
         .separator {
@@ -502,9 +497,13 @@
 
         <div class="separator"></div>
 
-        <div class="control-group" title="Activa un efecto de semitonos (puntos)">
+        <div class="control-group" title="Intensidad del efecto de semitonos (puntos)">
             <label for="ctrl-halftone">Halftone</label>
-            <input type="checkbox" id="ctrl-halftone">
+            <input type="range" id="ctrl-halftone" min="0" max="1" step="0.01">
+        </div>
+        <div class="control-group" title="Tamaño de los puntos">
+            <label for="ctrl-halftone-size">Tamaño Puntos</label>
+            <input type="range" id="ctrl-halftone-size" min="20" max="250" step="1">
         </div>
 
         <div class="separator"></div>
@@ -544,7 +543,7 @@
         }
     `;
 
-    // AQUI SE INCLUYE LA MODIFICACIÓN PARA EFECTO "AGUA / MANCHAS" CON OPCIÓN HALFTONE
+    // AQUI SE INCLUYE LA MODIFICACIÓN PARA EFECTO "AGUA / MANCHAS" CON OPCIÓN HALFTONE INDEPENDIENTE DE LA RESOLUCIÓN
     const FS = `
         precision highp float;
         uniform vec2  uResolution;
@@ -558,6 +557,7 @@
         uniform float uElevation;
         uniform float uFrequency;
         uniform float uHalftone;
+        uniform float uHalftoneSize;
 
         void main(){
             vec2 uv = gl_FragCoord.xy / uResolution.xy;
@@ -597,19 +597,28 @@
             vec3 col = mix(uColor1, uColor2, smoothstep(0.0, 0.4, f));
             col = mix(col, uColor3, smoothstep(0.3, 1.0, f));
 
-            // Aplicar el efecto Halftone
-            if(uHalftone > 0.5){
-                float dotSize = 8.0;
-                vec2 grid = fract(gl_FragCoord.xy / dotSize) - 0.5;
-                float radius = f * 0.7; // El radio del punto se basa en la intensidad del fluido
-                float d = length(grid);
+            // Aplicar el efecto Halftone de manera proporcional e independiente de la resolución
+            if(uHalftone > 0.01){
+                float dots = uHalftoneSize; // Cantidad de puntos (celdas) de manera vertical en la pantalla
+                vec2 gridUV = uv * dots;
+                vec2 gridFract = fract(gridUV) - 0.5;
                 
-                // Generar los puntos (circulos nítidos con antialiasing mínimo)
-                float dotMask = smoothstep(radius + 0.05, radius - 0.05, d);
+                float radius = f * 0.7; // El tamaño máximo del punto se basa en la intensidad del fluido
+                float d = length(gridFract);
                 
-                // Color de fondo oscuro (tomando el color 1 muy atenuado)
-                vec3 bg = uColor1 * 0.1;
-                col = mix(bg, col, dotMask);
+                // Suavizado dinámico (antialiasing) que se ajusta a la resolución (1080p, 4K, 8K)
+                // Esto garantiza que el punto se vea exactamente igual al exportar
+                float aa = dots / uResolution.y;
+                
+                // Generar los puntos con el suavizado escalable
+                float dotMask = smoothstep(radius + aa, radius - aa, d);
+                
+                // Color de fondo oscuro 
+                vec3 bg = uColor1 * 0.12;
+                vec3 htCol = mix(bg, col, dotMask);
+                
+                // Transición suave controlada por el deslizador
+                col = mix(col, htCol, uHalftone);
             }
 
             gl_FragColor = vec4(col, 1.0);
@@ -625,7 +634,7 @@
         color1:'#001f3f', color2:'#0074d9', color3:'#7fdbff',
         speed:0.5, elevation:1.0, frequency:0.5,
         colorOffset:0.8, colorMultiplier:1.0,
-        halftone: false, isPanelOpen:true
+        halftone: 0.0, halftoneSize: 110.0, isPanelOpen:true
     };
 
     const palettes = [
@@ -719,7 +728,8 @@
             uSpeed:           gl.getUniformLocation(prog,'uSpeed'),
             uElevation:       gl.getUniformLocation(prog,'uElevation'),
             uFrequency:       gl.getUniformLocation(prog,'uFrequency'),
-            uHalftone:        gl.getUniformLocation(prog,'uHalftone')
+            uHalftone:        gl.getUniformLocation(prog,'uHalftone'),
+            uHalftoneSize:    gl.getUniformLocation(prog,'uHalftoneSize')
         };
         return true;
     }
@@ -736,7 +746,8 @@
         gl.uniform1f(uniforms.uSpeed,            cfg.speed);
         gl.uniform1f(uniforms.uElevation,        cfg.elevation);
         gl.uniform1f(uniforms.uFrequency,        cfg.frequency);
-        gl.uniform1f(uniforms.uHalftone,         cfg.halftone ? 1.0 : 0.0);
+        gl.uniform1f(uniforms.uHalftone,         cfg.halftone);
+        gl.uniform1f(uniforms.uHalftoneSize,     cfg.halftoneSize);
     }
 
     function resizeCanvas(){
@@ -814,12 +825,15 @@
                 ogl.uniform1f(ou('uSpeed'),            cfg.speed);
                 ogl.uniform1f(ou('uElevation'),        cfg.elevation);
                 ogl.uniform1f(ou('uFrequency'),        cfg.frequency);
-                ogl.uniform1f(ou('uHalftone'),         cfg.halftone ? 1.0 : 0.0);
+                ogl.uniform1f(ou('uHalftone'),         cfg.halftone);
+                ogl.uniform1f(ou('uHalftoneSize'),     cfg.halftoneSize);
 
                 ogl.drawArrays(ogl.TRIANGLES, 0, 6);
 
                 offCanvas.toBlob(blob=>{
-                    if(!blob){ throw new Error('toBlob falló'); }
+                    if(!blob){ 
+                        throw new Error('toBlob falló - posible límite de resolución máxima en este dispositivo.'); 
+                    }
                     const url = URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
@@ -831,8 +845,8 @@
 
             }catch(err){
                 console.error('Capture error:', err);
-                progressEl.textContent = 'Error al generar la imagen.';
-                setTimeout(()=>progressEl.classList.remove('show'), 2500);
+                progressEl.textContent = 'Error: Límite de resolución o memoria superado en el dispositivo.';
+                setTimeout(()=>progressEl.classList.remove('show'), 3500);
             }
         }, 60);
     }
@@ -846,7 +860,8 @@
         { id:'ctrl-speed',     key:'speed',           uniform:'uSpeed',           type:'float' },
         { id:'ctrl-elevation', key:'elevation',       uniform:'uElevation',       type:'float' },
         { id:'ctrl-frequency', key:'frequency',       uniform:'uFrequency',       type:'float' },
-        { id:'ctrl-halftone',  key:'halftone',        uniform:'uHalftone',        type:'bool' }
+        { id:'ctrl-halftone',  key:'halftone',        uniform:'uHalftone',        type:'float' },
+        { id:'ctrl-halftone-size', key:'halftoneSize',uniform:'uHalftoneSize',    type:'float' }
     ];
 
     function updateGradientPill(c1,c2,c3){
